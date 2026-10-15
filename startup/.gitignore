@@ -1,0 +1,13 @@
+gitignore/*
+*.pdb
+*.lib
+*.obj
+*.exp
+
+# runtime state (per-machine, may contain host names) - don't track
+state.ini
+**/state.ini
+
+# clipboard history dump (may contain secrets) - never track
+cache/
+**/cache/
