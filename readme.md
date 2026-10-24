@@ -60,15 +60,17 @@ tools/                  独立小工具（不被管理器启动）
 | `SpecificPrograms/ahk_class WeChatMainWndForPC.ahk` | Ctrl+K 点击搜索框 |
 | `SpecificPrograms/DeepSeekHarness.ahk` | 把 DeepSeek Harness 主窗口固定在屏幕中央 3/4 |
 | `SpecificPrograms/ExplorerPlace.ahk` | Explorer 窗口固定位置并级联，多窗口不重叠 |
-| `SpecificPrograms/EverythingCenter.ahk` | Everything 窗口居中于"打开它时正在用的窗口" |
-| `SpecificPrograms/DeepSeekHarnessAttension.ahk` | 监听 `~\.dsh\attention-signal.json`，需要人确认/回合结束时把窗口置顶提醒 |
+| `SpecificPrograms/EverythingCenter.ahk` | Everything 窗口尺寸取当前屏幕工作区的 1/2，并居中于"打开它时正在用的窗口" |
+| `SpecificPrograms/DeepSeekHarnessAttension.ahk` | 监听 `~\.dsh\attention-signal.json`，需要确认/回合结束时发高优先级 Toast（用 DSH 自己的 AUMID），点击 Toast 激活 DSH 窗口（不再自动置顶） |
 
 `lib/winplace.ahk` 是上面三个"窗口固定"脚本共用的引擎（窗口事件钩子 + 轮询 + 强制归位 + 槽位分配），规则脚本只需要提供 `target(hwnd, slot, state)` 返回一个矩形。
+`lib/dshwin.ahk` 负责找到/激活 DSH 主窗口（含最小化和托盘隐藏状态），attention 脚本与 `tools/DSHActivate.ahk` 共用。`tools/DSHToast.ps1` 用 WinRT `ToastNotification` 发通知（`Priority = High`，AUMID 为 `com.deepseek.dsh`），`tools/DSHActivate.ahk` 是 `dsh-attention:` 协议的处理器：attention 脚本启动时自动注册该协议，点击 Toast 时由 Windows 调用它把 DSH 拉到前台。
 
 ## 已知限制 / 注意事项
 
 - **固定位置会覆盖手动摆放**：`ExplorerPlace` / `DeepSeekHarness` / `EverythingCenter` 默认 `ENFORCE_ALWAYS := true`，手动拖动、Win+←/→ 贴边都会被拉回。想自由摆放就把它设为 `false`。
 - `WinMove.ahk` 的拖拽手势在"被固定"的窗口上只保留点击切换最大化：拖动会被归位，所以直接跳过拖动（窗口属性 `AHK_WinPlace_Owner` 由 winplace 写入，值为归属脚本 PID）。
 - `WinAlwaysOnTop` 为拦截系统菜单项装了**全局** `WH_GETMESSAGE`/`WH_CALLWNDPROC` 钩子（DLL 在仓库里）：会被注入所有同位数进程（部分杀软会关注），且对**不同位数**的程序无效——64 位构建下，32 位程序的菜单项点了没反应。DLL 的重建命令见 `WinAlwaysOnTop_hook.c` 头部注释。
+- attention 的 Toast 要突破「请勿打扰」，需在 设置 → 通知 → 设置优先级通知 → 添加应用 里加入 DeepSeek Harness；否则通知只进通知中心，不会弹横幅。`tools/DSHToast.ps1` 里已设置 `Priority = High`。
 - 剪贴板归档是**明文**；`cache\` 已被 `.gitignore` 排除，但不要把它提交或同步到云端。
 - 托盘菜单的勾选状态在开/关、Rescan、Reload 时刷新；在管理器之外手动启动的脚本，勾选不会自动更新。

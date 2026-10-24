@@ -4,7 +4,7 @@
 Persistent
 
 ; =============================================================================
-; DeepSeek Harness: attention flash
+; DeepSeek Harness: attention toast
 ; -----------------------------------------------------------------------------
 ; The DSH profile plugin "dsh-attention-signal" writes
 ;     %USERPROFILE%\.dsh\attention-signal.json
@@ -12,62 +12,56 @@ Persistent
 ;     kind = "approval"   an approval decision is waiting  (待确认)
 ;     kind = "idle"       a turn finished                  (完成)
 ;
-; This script watches that file.  When a fresh signal arrives and the desktop
-; window is not already the active window, the window is put on top and *stays*
-; there: a topmost window is visible over whatever you are working in, and it
-; is never taken down because the window happened to become active - clicking
-; over by accident must not end the reminder.  You take it down yourself when
-; the matter is actually settled (the title-bar menu's "Always On Top" entry,
-; Ctrl+Space, or your own Always On Top toggle) - and a window you pinned that
-; way yourself is never touched.
+; This script watches that file and, when a fresh signal arrives while the app
+; window is not the active one, shows a Windows toast notification
+; (tools\DSHToast.ps1).  The toast is sent with the app's own AppUserModelID
+; (com.deepseek.dsh, from its Start Menu shortcut), so it carries the DeepSeek
+; Harness name and icon instead of a generic script identity, and its priority
+; is High, so it can break through Do Not Disturb when the user allows priority
+; notifications.
+;
+; Clicking the toast launches the dsh-attention: protocol.  This script
+; registers it at startup and points it at tools\DSHActivate.ahk, which
+; restores the window (also from the tray or from a minimized state) and brings
+; it to the front.  Nothing is pinned on top and focus is never taken without
+; that click.
 ;
 ; Notes
-;   * Focus is never stolen: the window is only raised, not activated.
-;   * A minimized or hidden window is brought back first - ShowWindow with
-;     SW_SHOWNOACTIVATE restores it to its previous size and position without
-;     taking focus - and is then raised like any other window.  Set
-;     ACTIVATE_ON_ALERT to true if it should also be focused.
 ;   * An already active window is skipped: you are looking at it.
-;   * The plugin's two idle sources (turn end and agent status) can arrive as a
-;     pair; repeats of the same kind inside DEDUPE_MS are ignored.
-;   * Set TOP_MS below to a nonzero value if you want the flash to time out
-;     instead of waiting for you.
+;   * Repeats of the same kind inside DEDUPE_MS are ignored - the plugin's two
+;     idle sources can arrive as a pair.
+;   * No window (the app was closed): no toast, there would be nothing to
+;     switch to.
+;   * The toast times out on its own but stays in the notification centre,
+;     where it can still be clicked later.
 ; =============================================================================
+
+#Include %A_ScriptDir%\..\lib\dshwin.ahk
 
 ; -----------------------------------------------------------------------------
 ; Settings
 ; -----------------------------------------------------------------------------
-TARGET_EXE  := "DeepSeek Harness.exe"                                ; app window
-SIGNAL_FILE := EnvGet("USERPROFILE") "\.dsh\attention-signal.json"   ; written by the plugin
-POLL_MS     := 250        ; how often to look at the signal file
-TOP_MS      := 0          ; 0 = stay on top until you cancel it yourself;
-                          ; otherwise milliseconds to stay on top (e.g. 12000)
-DEDUPE_MS   := 1500       ; ignore a repeat of the same kind within this window
-ACTIVATE_ON_ALERT := false ; true = also give the window focus when it is
-                           ; restored/raised; false = never steal focus
-RESTORE_HIDDEN := true     ; true = a window hidden to the tray is brought back
-                           ; too; false = leave a deliberately hidden window
-                           ; alone (a minimized one is still restored)
+SIGNAL_FILE     := EnvGet("USERPROFILE") "\.dsh\attention-signal.json"   ; written by the plugin
+POLL_MS         := 250        ; how often to look at the signal file
+DEDUPE_MS       := 1500       ; ignore a repeat of the same kind within this window
+LOG_FILE        := A_ScriptDir "\..\..\error.log"
+TOAST_SCRIPT    := A_ScriptDir "\..\..\tools\DSHToast.ps1"
+ACTIVATE_SCRIPT := A_ScriptDir "\..\..\tools\DSHActivate.ahk"
+PROTOCOL        := "dsh-attention"
 
 ; -----------------------------------------------------------------------------
 ; State
 ; -----------------------------------------------------------------------------
-LastRaw    := ""          ; last signal content we looked at
-LastKind   := ""
-LastTick   := 0
-TopHwnd    := 0           ; window WE put on top (0 = we set nothing)
-TopUntil   := 0           ; when to take it down again (TOP_MS > 0 only)
-
-; Window property the neighbour script WinAlwaysOnTop sets on windows the user
-; pinned: never take the topmost state away from one of those.
-PIN_PROP := "AHK_AlwaysOnTop_Pinned"
+LastRaw  := ""            ; last signal content we looked at
+LastKind := ""
+LastTick := 0
 
 ; -----------------------------------------------------------------------------
 ; Go
 ; -----------------------------------------------------------------------------
 LastRaw := ReadSignal()   ; an old file must not fire at startup
+RegisterProtocol()
 SetTimer(Tick, POLL_MS)
-OnExit(OnExitHandler)
 
 ReadSignal() {
     global SIGNAL_FILE
@@ -80,21 +74,18 @@ ReadSignal() {
 Tick() {
     global LastRaw
 
-    ; The window can vanish between AppWindow() and the calls on it; a timer
-    ; thread must never raise the error dialog, so everything is guarded.
+    ; A timer thread must never raise the error dialog, so everything is guarded.
     try {
         raw := ReadSignal()
         if (raw != "" && raw != LastRaw) {
             LastRaw := raw
             HandleSignal(raw)
         }
-        RevertIfDue()
     }
 }
 
 HandleSignal(raw) {
-    global TARGET_EXE, DEDUPE_MS, TOP_MS, ACTIVATE_ON_ALERT, RESTORE_HIDDEN
-    global LastKind, LastTick, TopHwnd, TopUntil
+    global DEDUPE_MS, LastKind, LastTick
 
     kind := ""
     if (RegExMatch(raw, '"kind"\s*:\s*"([A-Za-z]+)"', &m))
@@ -109,119 +100,78 @@ HandleSignal(raw) {
     LastTick := now
 
     state := ""
-    hwnd := AppWindow(&state)
+    hwnd := Dsh_FindWindow(&state)
     if (!hwnd)
-        return
+        return                                   ; no window to offer
     if (state = "visible" && WinActive("ahk_id " hwnd))
-        return                               ; you are already looking at it
-    if (state = "hidden" && !RESTORE_HIDDEN)
-        return                               ; hidden on purpose - leave it be
+        return                                   ; you are already looking at it
 
-    if (state != "visible") {
-        ; Minimized or hidden: bring it back to its previous size and position
-        ; without taking focus (SW_SHOWNOACTIVATE = 4).
-        DllCall("ShowWindow", "Ptr", hwnd, "Int", 4)
-        Sleep(150)                           ; let the shell finish the transition
-    }
-
-    if (ACTIVATE_ON_ALERT)
-        try WinActivate("ahk_id " hwnd)
-
-    ; Raise it (again): this also puts it above other topmost windows, and it
-    ; stays there until you cancel it yourself.
-    WinSetAlwaysOnTop(1, "ahk_id " hwnd)
-    TopHwnd := hwnd
-    TopUntil := TOP_MS > 0 ? now + TOP_MS : 0
+    ShowToast(kind)
 }
 
-; The real application window whatever state it is in: a restored one first,
-; then a minimized one, then a hidden one.  state receives "visible",
-; "minimized" or "hidden" ("" when nothing was found).
-AppWindow(&state) {
-    global TARGET_EXE
+ShowToast(kind) {
+    if (kind = "approval")
+        SendToast("DeepSeek Harness 需要确认"
+            , "有审批请求在等待。点击这条消息切换到 DeepSeek Harness。")
+    else if (kind = "idle")
+        SendToast("DeepSeek Harness 回合结束"
+            , "任务已完成。点击这条消息切换到 DeepSeek Harness。")
+    else
+        SendToast("DeepSeek Harness"
+            , "有新的提醒。点击这条消息切换到 DeepSeek Harness。")
+}
 
-    state := ""
-    for hwnd in WinGetList("ahk_exe " TARGET_EXE) {
-        if (WinGetMinMax("ahk_id " hwnd) = -1)
-            continue
-        if (IsAppWindow(hwnd)) {
-            state := "visible"
-            return hwnd
-        }
+; tools\DSHToast.ps1 needs Windows PowerShell (5.1): it is the one with the
+; WinRT projection for Windows.UI.Notifications.  Run it hidden - the toast is
+; the only thing that should be seen.
+SendToast(title, text) {
+    global TOAST_SCRIPT, PROTOCOL
+
+    if (!FileExist(TOAST_SCRIPT)) {
+        LogLine("toast helper not found: " TOAST_SCRIPT)
+        return
     }
 
-    for hwnd in WinGetList("ahk_exe " TARGET_EXE) {
-        if (WinGetMinMax("ahk_id " hwnd) != -1)
-            continue
-        if (IsAppWindow(hwnd, true)) {
-            state := "minimized"
-            return hwnd
-        }
-    }
+    ps := A_WinDir "\System32\WindowsPowerShell\v1.0\powershell.exe"
+    args := "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden"
+    args .= ' -File "' TOAST_SCRIPT '"'
+    args .= ' -Title "' title '"'
+    args .= ' -Text "' text '"'
+    args .= ' -Launch "' PROTOCOL ':activate"'
 
-    DetectHiddenWindows(true)
-    hidden := 0
+    try Run('"' ps '" ' args, , "Hide")
+    catch as e
+        LogLine("could not start the toast helper: " e.Message)
+}
+
+; Windows launches the registered command when the toast is clicked.  The
+; command is rewritten whenever the script or the interpreter moved, so a
+; relocated checkout keeps working.
+RegisterProtocol() {
+    global PROTOCOL, ACTIVATE_SCRIPT
+
+    key := "HKCU\Software\Classes\" PROTOCOL
+    cmd := '"' A_AhkPath '" "' ACTIVATE_SCRIPT '" "%1"'
+
+    existing := ""
+    try existing := RegRead(key "\shell\open\command", "")
+    if (existing = cmd)
+        return
+
     try {
-        for hwnd in WinGetList("ahk_exe " TARGET_EXE) {
-            if (DllCall("IsWindowVisible", "Ptr", hwnd))
-                continue
-            if (IsAppWindow(hwnd, true)) {
-                hidden := hwnd
-                break
-            }
-        }
-    } finally {
-        DetectHiddenWindows(false)
-    }
-    if (hidden)
-        state := "hidden"
-    return hidden
-}
-
-; A real application window needs a title bar, which means both WS_BORDER and
-; WS_DLGFRAME.  For minimized and hidden candidates also require the app's own
-; window class and a title, so the app's hidden helper windows (Chromium creates
-; several) are never mistaken for the main window.
-IsAppWindow(hwnd, strict := false) {
-    try {
-        if (strict && WinGetClass("ahk_id " hwnd) != "Chrome_WidgetWin_1")
-            return false
-        if ((WinGetStyle("ahk_id " hwnd) & 0x00C00000) != 0x00C00000)
-            return false
-        if (strict && WinGetTitle("ahk_id " hwnd) = "")
-            return false
-    } catch {
-        return false
-    }
-    return true
-}
-
-; Only relevant when TOP_MS is set: the flash times out on its own.
-RevertIfDue() {
-    global TopHwnd, TopUntil
-    if (!TopHwnd || !TopUntil)
-        return
-    if (!WinExist("ahk_id " TopHwnd)) {
-        TopHwnd := 0
-        return
-    }
-    if (A_TickCount >= TopUntil) {
-        ClearOurTopmost(TopHwnd)
-        TopHwnd := 0
+        RegCreateKey(key)
+        RegCreateKey(key "\shell\open\command")
+        RegWrite("URL:" PROTOCOL, "REG_SZ", key)
+        RegWrite("", "REG_SZ", key, "URL Protocol")
+        RegWrite(cmd, "REG_SZ", key "\shell\open\command")
+    } catch as e {
+        LogLine("could not register the " PROTOCOL ": protocol: " e.Message)
     }
 }
 
-; Take the topmost state away only from a window this script raised - never
-; from one the user pinned with WinAlwaysOnTop.
-ClearOurTopmost(hwnd) {
-    global PIN_PROP
-    if (DllCall("GetPropW", "Ptr", hwnd, "WStr", PIN_PROP, "Ptr"))
-        return
-    try WinSetAlwaysOnTop(0, "ahk_id " hwnd)
-}
-
-OnExitHandler(*) {
-    global TopHwnd
-    if (TopHwnd && WinExist("ahk_id " TopHwnd))
-        ClearOurTopmost(TopHwnd)
+; Failures (the toast helper missing, PowerShell refusing, ...) are rare but
+; silent otherwise; keep them next to the other scripts' errors.
+LogLine(text) {
+    global LOG_FILE
+    try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") " attention: " text "`n", LOG_FILE)
 }
