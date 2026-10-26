@@ -14,11 +14,12 @@ Scripts := []          ; Array of {name, path, submenu, label, menu}
 SubMenus := Map()      ; submenu name => array of script indices
 Enabled := Map()       ; script path => true/false: what the USER wants running
                        ; (persisted; deliberately not derived from the live state)
+ManageMenu := 0        ; the "All scripts" submenu, kept so it can be greyed out
 
 ; A script with one of these names would collide with our own menu items, so it
 ; is shown with " (script)" appended.
 ReservedNames := Map("Start All", 1, "Stop All", 1, "Restart All", 1
-                    , "Open Folder", 1, "Reload", 1, "Rescan Scripts", 1, "Exit", 1)
+                    , "All scripts", 1, "Open Folder", 1, "Reload", 1, "Exit", 1)
 
 ; ==============================================================================
 ; Initial launch
@@ -26,6 +27,11 @@ ReservedNames := Map("Start All", 1, "Stop All", 1, "Restart All", 1
 DiscoverScripts(StartupDir)
 RestoreState()
 BuildMenu()
+
+; The Win32 tray menu is only built when the icon is clicked, so without this
+; the checkmarks would go stale the moment a script starts or stops on its own
+; (crash, manual launch, another session). A slow poll is enough.
+SetTimer(RefreshChecks, 2000)
 
 for s in Scripts {
     if Enabled[s.path]
@@ -72,10 +78,9 @@ SaveState() {
 ; WM_USER+4; the checkmarks are simply refreshed after each toggle.
 ; ==============================================================================
 BuildMenu() {
-    global Scripts, SubMenus, StartupDir
+    global Scripts, SubMenus, StartupDir, ManageMenu
 
     A_TrayMenu.Delete()
-    A_IconTip := "AHK Script Manager"
 
     ; Top-level scripts
     for s in Scripts {
@@ -102,21 +107,28 @@ BuildMenu() {
         try A_TrayMenu.SetIcon(menuName, "shell32.dll", 4)
     }
 
+    ; Footer.  The bulk actions are one hover away instead of three separate
+    ; entries, and "Rescan Scripts" is gone: reloading the manager re-discovers
+    ; the startup folder anyway, so one Reload does both.
     A_TrayMenu.Add()
-    A_TrayMenu.Add("Start All", StartAll)
-    A_TrayMenu.Add("Stop All", StopAll)
-    A_TrayMenu.Add("Restart All", RestartAll)
+
+    bulk := Menu()
+    bulk.Add("Start All", StartAll)
+    bulk.Add("Stop All", StopAll)
+    bulk.Add("Restart All", RestartAll)
+    bulk.SetIcon("Start All", "imageres.dll", 102)
+    bulk.SetIcon("Stop All", "imageres.dll", 101)
+    bulk.SetIcon("Restart All", "imageres.dll", 229)
+    A_TrayMenu.Add("All scripts", bulk)
+    ManageMenu := bulk
+
     A_TrayMenu.Add("Open Folder", (*) => Run(StartupDir))
     A_TrayMenu.Add()
-    A_TrayMenu.Add("Rescan Scripts", RescanScripts)
     A_TrayMenu.Add("Reload", (*) => Reload())
     A_TrayMenu.Add("Exit", MenuExit)
 
-    A_TrayMenu.SetIcon("Start All", "imageres.dll", 102)
-    A_TrayMenu.SetIcon("Stop All", "imageres.dll", 101)
-    A_TrayMenu.SetIcon("Restart All", "imageres.dll", 229)
+    A_TrayMenu.SetIcon("All scripts", "shell32.dll", 4)
     A_TrayMenu.SetIcon("Open Folder", "imageres.dll", 4)
-    A_TrayMenu.SetIcon("Rescan Scripts", "imageres.dll", 229)
     A_TrayMenu.SetIcon("Reload", "imageres.dll", 229)
     A_TrayMenu.SetIcon("Exit", "imageres.dll", 85)
 
@@ -129,30 +141,30 @@ ScriptLabel(name) {
 }
 
 RefreshChecks() {
-    global Scripts
+    global Scripts, ManageMenu
+
+    running := 0
     for s in Scripts {
-        if IsScriptRunning(s.path)
+        if IsScriptRunning(s.path) {
             s.menu.Check(s.label)
-        else
+            running++
+        } else
             s.menu.Uncheck(s.label)
     }
-}
 
-; Re-discover the startup folder (new/removed scripts) without reloading.
-; Called from the tray menu, i.e. after the menu has closed.
-RescanScripts(*) {
-    global Scripts, SubMenus, Enabled, StartupDir
-    try {
-        Scripts := []
-        SubMenus := Map()
-        DiscoverScripts(StartupDir)
-        for s in Scripts
-            if (!Enabled.Has(s.path))
-                Enabled[s.path] := true
-        BuildMenu()
-    } catch as e {
-        LogError("Rescan failed: " e.Message)
+    ; Grey out the bulk action that would do nothing, and put the tally in the
+    ; tray tooltip so the state is readable without opening the menu at all.
+    if (ManageMenu) {
+        if (running = Scripts.Length)
+            ManageMenu.Disable("Start All")
+        else
+            ManageMenu.Enable("Start All")
+        if (running = 0)
+            ManageMenu.Disable("Stop All")
+        else
+            ManageMenu.Enable("Stop All")
     }
+    A_IconTip := "AHK Script Manager - " running "/" Scripts.Length " running"
 }
 
 ; ==============================================================================
