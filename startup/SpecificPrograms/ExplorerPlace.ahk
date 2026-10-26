@@ -36,7 +36,7 @@ Persistent
 ; WinPlace_SlotRect() helper, also used by DeepSeekHarness.ahk.
 ; =============================================================================
 
-#Include %A_ScriptDir%\..\lib\winplace.ahk
+#Include ..\lib\winplace.ahk
 
 ; -----------------------------------------------------------------------------
 ; Settings

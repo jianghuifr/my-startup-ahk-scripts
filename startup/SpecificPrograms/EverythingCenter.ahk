@@ -28,7 +28,7 @@ Persistent
 ; which the Explorer and DSH scripts share.
 ; =============================================================================
 
-#Include %A_ScriptDir%\..\lib\winplace.ahk
+#Include ..\lib\winplace.ahk
 
 ; -----------------------------------------------------------------------------
 ; Settings

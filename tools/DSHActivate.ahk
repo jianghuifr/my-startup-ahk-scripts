@@ -7,7 +7,7 @@
 ; startup\SpecificPrograms\DeepSeekHarnessAttension.ahk).  It only has to put
 ; the app window in front - restoring it first when it sits in the tray - and
 ; then get out of the way; the monitor itself keeps running.
-#Include %A_ScriptDir%\..\startup\lib\dshwin.ahk
+#Include ..\startup\lib\dshwin.ahk
 
 Dsh_Activate()
 ExitApp

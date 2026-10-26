@@ -3,8 +3,8 @@
 #NoTrayIcon
 Persistent
 
-#Include %A_ScriptDir%\..\lib\gdip.ahk
-#Include %A_ScriptDir%\..\lib\win.ahk
+#Include ..\lib\gdip.ahk
+#Include ..\lib\win.ahk
 
 ; ==============================================================================
 ; State

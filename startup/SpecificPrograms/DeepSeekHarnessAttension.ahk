@@ -36,7 +36,7 @@ Persistent
 ;     where it can still be clicked later.
 ; =============================================================================
 
-#Include %A_ScriptDir%\..\lib\dshwin.ahk
+#Include ..\lib\dshwin.ahk
 
 ; -----------------------------------------------------------------------------
 ; Settings

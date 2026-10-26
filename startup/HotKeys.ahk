@@ -2,8 +2,8 @@
 #SingleInstance Force
 #NoTrayIcon
 
-#Include %A_ScriptDir%\lib\system.ahk
-#Include %A_ScriptDir%\lib\everything.ahk
+#Include lib\system.ahk
+#Include lib\everything.ahk
 
 ; Everything's install path differs between machines, so it is resolved once
 ; here at startup (the Everything service knows it) instead of being hard-coded;
