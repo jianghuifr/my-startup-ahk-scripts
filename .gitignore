@@ -1,5 +1,6 @@
 *
 !.gitignore
+!.gitattributes
 !startup.ahk
 !startup/
 !startup/**

@@ -1,0 +1,14 @@
+# Normalise line endings to LF in both the repository and the working tree.
+#
+# The machine-wide git config sets core.autocrlf=true, so with no attributes
+# Git would check text files out as CRLF; every LF working copy (agent/Claude
+# edits, this repo's index) then triggers "LF will be replaced by CRLF" on add
+# and gets silently rewritten on the next checkout.  Stating eol=lf here makes
+# the index and the working tree agree on every platform and clone.
+* text=auto eol=lf
+
+# Assets must never be converted or diffed as text.
+*.dll binary
+*.exe binary
+*.png binary
+*.ico binary
