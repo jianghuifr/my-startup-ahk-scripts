@@ -65,6 +65,7 @@ tools/                  独立小工具（不被管理器启动）
 
 `lib/winplace.ahk` 是上面三个"窗口固定"脚本共用的引擎（窗口事件钩子 + 轮询 + 强制归位 + 槽位分配），规则脚本只需要提供 `target(hwnd, slot, state)` 返回一个矩形。
 `lib/dshwin.ahk` 负责找到/激活 DSH 主窗口（含最小化和托盘隐藏状态），attention 脚本与 `tools/DSHActivate.ahk` 共用。`tools/DSHToast.ps1` 用 WinRT `ToastNotification` 发通知（`Priority = High`，AUMID 为 `com.deepseek.dsh`），`tools/DSHActivate.ahk` 是 `dsh-attention:` 协议的处理器：attention 脚本启动时自动注册该协议，点击 Toast 时由 Windows 调用它把 DSH 拉到前台。
+`lib/everything.ahk` 在 `HotKeys.ahk` 启动时定位 `Everything.exe`：先查 Windows 服务 `Everything` 的二进制路径（即 `sc qc Everything` 里的 `BINARY_PATH_NAME`，Everything 界面没开也能查到），再查注册表里的安装位置、运行中的进程，最后才试常见安装目录——换电脑或换了安装位置不用改脚本。
 
 ## 已知限制 / 注意事项
 

@@ -3,6 +3,12 @@
 #NoTrayIcon
 
 #Include %A_ScriptDir%\lib\system.ahk
+#Include %A_ScriptDir%\lib\everything.ahk
+
+; Everything's install path differs between machines, so it is resolved once
+; here at startup (the Everything service knows it) instead of being hard-coded;
+; ShowEverything re-resolves only if the stored path has gone away since.
+EVERYTHING_EXE := EverythingFindExecutable()
 
 SetCapsLockState("AlwaysOff")
 CapsLock:: {
@@ -131,15 +137,29 @@ ShowToolTip(mouse_exe, titles, index := 1) {
 ; Ctrl+Shift+E.  Everything is single-instance: when it is already running the
 ; window may be minimized or closed to the tray, so restore what exists instead
 ; of starting a second copy.  With nothing running (or only the service, which
-; has no window) the exe is launched.
+; has no window) the exe is launched from the path resolved at startup.
 ShowEverything() {
+    global EVERYTHING_EXE
+
     if (hwnd := WinExist("ahk_class EVERYTHING")) {
         if (WinGetMinMax("ahk_id " hwnd) = -1)
             WinRestore("ahk_id " hwnd)
         try WinActivate("ahk_id " hwnd)
         return
     }
-    try Run('"' EverythingExecutable() '"')
+
+    ; The script may have started before Everything was installed, or the app
+    ; was reinstalled elsewhere since: look the path up again, then give up.
+    exe := EVERYTHING_EXE
+    if (exe = "" || !FileExist(exe))
+        exe := EverythingFindExecutable()
+    if (exe = "") {
+        ToolTip("找不到 Everything.exe：`n请确认 Everything 已安装且服务正常。")
+        SetTimer(() => ToolTip(), -4000)
+        return
+    }
+
+    try Run('"' exe '"')
     catch as e {
         ToolTip("无法启动 Everything：`n" e.Message)
         SetTimer(() => ToolTip(), -3000)
@@ -147,16 +167,4 @@ ShowEverything() {
     }
     if (hwnd := WinWait("ahk_class EVERYTHING", , 2))
         try WinActivate("ahk_id " hwnd)
-}
-
-; Everything does not register an App Paths entry; use the usual install
-; locations and fall back to letting the shell resolve the bare name.
-EverythingExecutable() {
-    for dir in [EnvGet("ProgramFiles"), EnvGet("ProgramFiles(x86)")
-              , EnvGet("LOCALAPPDATA") "\Programs"] {
-        exe := dir "\Everything\Everything.exe"
-        if (dir != "" && FileExist(exe))
-            return exe
-    }
-    return "Everything.exe"
 }
