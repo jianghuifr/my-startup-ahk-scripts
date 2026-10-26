@@ -26,6 +26,10 @@ Persistent
 ;
 ; The placement engine (hook + poll + enforcement) lives in ..\lib\winplace.ahk,
 ; which the Explorer and DSH scripts share.
+;
+; The Everything-only hotkeys (Ctrl+L to jump to the search box, Alt+Enter to
+; run the search text as a command) live at the bottom of this file; they used
+; to be the separate ahk_class EVERYTHING.ahk script.
 ; =============================================================================
 
 #Include ..\lib\winplace.ahk
@@ -85,3 +89,29 @@ EverythingTarget(hwnd, slot, st) {
     WinPlace_ClampToWorkArea(x, y, w, h, &cX, &cY, &cW, &cH)
     return { x: cX, y: cY, w: cW, h: cH }
 }
+
+; -----------------------------------------------------------------------------
+; Hotkeys (Everything window only)
+; -----------------------------------------------------------------------------
+; Ctrl+Shift+E (launch or activate Everything) is global and lives in
+; HotKeys.ahk. These two only make sense while the Everything window itself is
+; focused, so they are scoped with #HotIf.
+#HotIf WinActive("ahk_class EVERYTHING")
+
+; Ctrl+L: jump to the search box and select whatever is in it.
+^l:: {
+    ControlFocus("Edit1", "ahk_class EVERYTHING")
+    Send("^a")
+}
+
+; Alt+Enter: run the search text as a command in a cmd window opened at the
+; Desktop. Both paths are quoted: a Desktop redirected into a folder with spaces
+; would otherwise break "cd /d".
+!Enter:: {
+    command := ControlGetText("Edit1", "ahk_class EVERYTHING")
+    if (command = "")
+        return
+    Run('"' A_ComSpec '" /K cd /d "' A_Desktop '" && cls && ' command)
+}
+
+#HotIf
