@@ -34,6 +34,9 @@ RemoveToolTip(*) {
 ^+#Up::system_SetScreenBrightness(5)
 ^+#Down::system_SetScreenBrightness(-5)
 ;-------------------------------------------------------------------------------
+; Everything: launch it, or bring the running window to the front.
+^+e::ShowEverything()
+;-------------------------------------------------------------------------------
 #`::SwitchToSimilarWindow()
 ;-------------------------------------------------------------------------------
 ~RButton & WheelDown::Send("{Blind}+{WheelDown}")
@@ -123,4 +126,37 @@ ShowToolTip(mouse_exe, titles, index := 1) {
     }
     ToolTip(_title, , , 1)
     return index
+}
+
+; Ctrl+Shift+E.  Everything is single-instance: when it is already running the
+; window may be minimized or closed to the tray, so restore what exists instead
+; of starting a second copy.  With nothing running (or only the service, which
+; has no window) the exe is launched.
+ShowEverything() {
+    if (hwnd := WinExist("ahk_class EVERYTHING")) {
+        if (WinGetMinMax("ahk_id " hwnd) = -1)
+            WinRestore("ahk_id " hwnd)
+        try WinActivate("ahk_id " hwnd)
+        return
+    }
+    try Run('"' EverythingExecutable() '"')
+    catch as e {
+        ToolTip("无法启动 Everything：`n" e.Message)
+        SetTimer(() => ToolTip(), -3000)
+        return
+    }
+    if (hwnd := WinWait("ahk_class EVERYTHING", , 2))
+        try WinActivate("ahk_id " hwnd)
+}
+
+; Everything does not register an App Paths entry; use the usual install
+; locations and fall back to letting the shell resolve the bare name.
+EverythingExecutable() {
+    for dir in [EnvGet("ProgramFiles"), EnvGet("ProgramFiles(x86)")
+              , EnvGet("LOCALAPPDATA") "\Programs"] {
+        exe := dir "\Everything\Everything.exe"
+        if (dir != "" && FileExist(exe))
+            return exe
+    }
+    return "Everything.exe"
 }

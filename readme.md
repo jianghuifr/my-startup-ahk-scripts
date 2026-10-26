@@ -47,7 +47,7 @@ tools/                  独立小工具（不被管理器启动）
 
 | 脚本 | 功能 |
 | --- | --- |
-| `HotKeys.ahk` | Ctrl+Win+C 在当前目录开 cmd（+Shift 管理员）；Ctrl+Win+P 开 PowerShell；Ctrl+Shift+Z 所有设置；媒体控制；屏幕亮度；`` #` `` 在同类窗口间切换；右键+滚轮 → Shift+滚轮 |
+| `HotKeys.ahk` | Ctrl+Win+C 在当前目录开 cmd（+Shift 管理员）；Ctrl+Win+P 开 PowerShell；Ctrl+Shift+Z 所有设置；Ctrl+Shift+E 启动/激活 Everything；媒体控制；屏幕亮度；`` #` `` 在同类窗口间切换；右键+滚轮 → Shift+滚轮 |
 | `HotStrings.ahk` | 常见拼写纠正（`retrun`→`return` 之类） |
 | `WinMove.ahk` | 按住左键再按右键拖动窗口；未移动即点击 = 最大化/还原；Esc 取消 |
 | `OnePixel.ahk` | 按住左键时 WASD 逐像素移动鼠标 |
@@ -60,7 +60,7 @@ tools/                  独立小工具（不被管理器启动）
 | `SpecificPrograms/ahk_class WeChatMainWndForPC.ahk` | Ctrl+K 点击搜索框 |
 | `SpecificPrograms/DeepSeekHarness.ahk` | 把 DeepSeek Harness 主窗口固定在屏幕中央 3/4 |
 | `SpecificPrograms/ExplorerPlace.ahk` | Explorer 窗口固定位置并级联，多窗口不重叠 |
-| `SpecificPrograms/EverythingCenter.ahk` | Everything 窗口尺寸取当前屏幕工作区的 1/2，并居中于"打开它时正在用的窗口" |
+| `SpecificPrograms/EverythingCenter.ahk` | Everything 窗口始终居中于所在屏幕，尺寸取该屏幕工作区的 1/2（`RATIO`）；拖动/Win+←→ 后会被拉回 |
 | `SpecificPrograms/DeepSeekHarnessAttension.ahk` | 监听 `~\.dsh\attention-signal.json`，需要确认/回合结束时发高优先级 Toast（用 DSH 自己的 AUMID），点击 Toast 激活 DSH 窗口（不再自动置顶） |
 
 `lib/winplace.ahk` 是上面三个"窗口固定"脚本共用的引擎（窗口事件钩子 + 轮询 + 强制归位 + 槽位分配），规则脚本只需要提供 `target(hwnd, slot, state)` 返回一个矩形。
