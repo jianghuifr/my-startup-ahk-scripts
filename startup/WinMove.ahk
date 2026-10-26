@@ -89,8 +89,8 @@ TryWinMove(win, x, y) {
     }
 }
 
-; Windows managed by a winplace rule (ExplorerPlace, DeepSeekHarness,
-; EverythingCenter) carry the owning script's PID as a window property. The
+; Windows managed by a winplace rule (Explorer, EverythingCenter) carry the
+; owning script's PID as a window property. The
 ; property can outlive a crashed placement script, so the owner must be alive
 ; for the window to count as pinned.
 IsPinnedByRule(hwnd) {

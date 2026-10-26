@@ -4,7 +4,7 @@
 ; Shared by the per-class scripts in SpecificPrograms\, which include it and
 ; then call WinPlace_Start:
 ;
-;   #Include %A_ScriptDir%\..\lib\winplace.ahk
+;   #Include ..\lib\winplace.ahk
 ;   WinPlace_Start([{classes: ["EVERYTHING"], target: MyTarget}], {pollMs: 120})
 ;
 ; A rule is an object:

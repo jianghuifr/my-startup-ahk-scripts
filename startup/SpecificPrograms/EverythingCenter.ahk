@@ -25,7 +25,7 @@ Persistent
 ;     centres it again.
 ;
 ; The placement engine (hook + poll + enforcement) lives in ..\lib\winplace.ahk,
-; which the Explorer and DSH scripts share.
+; which the Explorer script shares.
 ;
 ; The Everything-only hotkeys (Ctrl+L to jump to the search box, Alt+Enter to
 ; run the search text as a command) live at the bottom of this file; they used

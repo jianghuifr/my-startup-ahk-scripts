@@ -97,23 +97,9 @@ BuildMenu() {
         }
         A_TrayMenu.Add(menuName, subMenu)
 
-        ; Set submenu icon from desktop.ini or default folder icon
-        iconFile := ""
-        iconIdx := 0
-        desktopIni := StartupDir "\" menuName "\desktop.ini"
-        if FileExist(desktopIni) {
-            iconRes := IniRead(desktopIni, ".ShellClassInfo", "IconResource", "")
-            if (iconRes != "") {
-                parts := StrSplit(iconRes, ",")
-                iconFile := parts[1]
-                iconIdx := parts.Length > 1 ? Integer(parts[2]) : 0
-            }
-        }
-        if (iconFile = "") {
-            iconFile := "shell32.dll"
-            iconIdx := 4
-        }
-        try A_TrayMenu.SetIcon(menuName, iconFile, iconIdx)
+        ; Folder icon for the submenu.  (The old per-folder desktop.ini lookup
+        ; was never used: no startup subfolder ships one.)
+        try A_TrayMenu.SetIcon(menuName, "shell32.dll", 4)
     }
 
     A_TrayMenu.Add()
@@ -226,15 +212,11 @@ IsScriptRunning(scriptPath) {
 LaunchScript(s) {
     if IsScriptRunning(s.path)
         return
-    SplitPath(s.path, , &dir, , &nameNoExt)
-    cliFile := dir "\" nameNoExt ".cli"
-    params := ""
+    SplitPath(s.path, , &dir)
     try {
-        if FileExist(cliFile)
-            params := Trim(StrSplit(FileRead(cliFile) "`n", "`n")[1])
         ; Start through the interpreter that runs this manager: relying on the
         ; .ahk file association could pick AutoHotkey v1 and only pop an error.
-        Run('"' A_AhkPath '" "' s.path '"' (params = "" ? "" : " " params), dir)
+        Run('"' A_AhkPath '" "' s.path '"', dir)
     } catch as e {
         LogError("Launch failed: " s.path " - " e.Message)
     }
