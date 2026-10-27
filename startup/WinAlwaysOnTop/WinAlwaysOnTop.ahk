@@ -80,6 +80,11 @@ SetTimer(InjectMenuOnForeground, 200)
 if (RAINBOW)
     SetTimer(AnimateRainbow, 50)
 
+; From here on the script lives in timer/message threads: an uncaught error in
+; one of them would raise a dialog, which freezes every timer and leaves a stale
+; border on screen.  Log it and keep going; the next tick retries.
+OnError(LogError)
+
 ; ==============================================================================
 ; Ctrl+Space hotkey
 ; ==============================================================================
@@ -126,6 +131,37 @@ OverlayRect(info, &x, &y, &w, &h) {
     y := Round((info.y - SHADOW) / s)
     w := Round((info.w + SHADOW * 2) / s)
     h := Round((info.h + SHADOW * 2) / s)
+}
+
+; A pinned window keeps its pin (and the property on it) in every state; the
+; border, however, is only drawn while the window is really on screen in its
+; normal state.  It is hidden - and comes back once the window is normal again -
+; for a minimized, maximized, hidden (tray), DWM-cloaked (another virtual
+; desktop, suspended UWP), off-screen or zero-size window, and for a borderless
+; fullscreen one.
+ShouldShowBorder(hwnd) {
+    try {
+        if (!DllCall("IsWindow", "Ptr", hwnd))
+            return false
+        if (!DllCall("IsWindowVisible", "Ptr", hwnd))
+            return false
+        if (WinGetMinMax("ahk_id " hwnd) != 0)      ; 1 maximized, -1 minimized
+            return false
+        if (win_IsCloaked(hwnd))
+            return false
+        win_GetVisibleRect(hwnd, &x, &y, &w, &h)
+        if (w <= 0 || h <= 0)
+            return false
+        if (!win_RectOnScreen(x, y, w, h))
+            return false
+        ; A borderless fullscreen window covers the whole monitor.  That test
+        ; needs the window's outer rect: DWM trims the invisible resize border,
+        ; so a window sized to the monitor would not look like it covers it.
+        WinGetPos(&ox, &oy, &ow, &oh, "ahk_id " hwnd)
+        return !win_CoversWholeMonitor(ox, oy, ow, oh)
+    } catch {
+        return false
+    }
 }
 
 ; ==============================================================================
@@ -200,6 +236,11 @@ OnToggleTopmost(wParam, lParam, msg, hwnd) {
 ; Core toggle - shared by hotkey, system menu, and tray menu
 ; ==============================================================================
 TogglePin(hwnd) {
+    ; The window may be gone by the time a queued hotkey/menu message is handled.
+    if (!DllCall("IsWindow", "Ptr", hwnd)) {
+        RemoveOverlay(hwnd)
+        return
+    }
     if (win_IsTopmost(hwnd)) {  ; unpin
         WinSetAlwaysOnTop(0, "ahk_id " hwnd)
         DllCall("RemovePropW", "Ptr", hwnd, "WStr", PIN_PROP)
@@ -223,8 +264,12 @@ CreateOverlay(targetHwnd) {
     g.Show("NA Hide")
     win_GetVisibleRect(targetHwnd, &wx, &wy, &ww, &wh)
     PinnedWindows[targetHwnd] := {gui: g, overlay: g.Hwnd, x: wx, y: wy, w: ww, h: wh
-        , r: win_GetCornerRadius(targetHwnd)}
-    DrawShadow(targetHwnd)
+        , r: win_GetCornerRadius(targetHwnd), shown: false}
+    ; Pinning a window that is not in its normal state right now (maximized,
+    ; hidden, minimized, ...) keeps the pin but shows no border; WatchPinnedWindows
+    ; draws it when the window is normal again.
+    if (ShouldShowBorder(targetHwnd))
+        DrawShadow(targetHwnd)
 }
 
 RemoveOverlay(targetHwnd) {
@@ -329,6 +374,7 @@ DrawShadow(targetHwnd) {
         , "UInt", 2)
 
     info.gui.Show("NA")
+    info.shown := true
     ; Place overlay at the very top - z-order handled via region clipping
     DllCall("SetWindowPos", "Ptr", overlayHwnd, "Ptr", -1, "Int", 0, "Int", 0, "Int", 0, "Int", 0, "UInt", 0x13) ; HWND_TOPMOST
 
@@ -439,9 +485,9 @@ AnimateRainbow() {
     Critical("On")
     HUE_OFFSET := Mod(HUE_OFFSET + RAINBOW_SPEED, 360)
     for targetHwnd, info in PinnedWindows {
-        if (!WinExist("ahk_id " targetHwnd))
-            continue
-        if (WinGetMinMax("ahk_id " targetHwnd) = -1) ; minimized -> overlay hidden, skip redraw
+        ; WatchPinnedWindows hides the overlay in abnormal states; do not
+        ; redraw while it is hidden (DrawShadow would show it again).
+        if (!info.shown || !ShouldShowBorder(targetHwnd))
             continue
         DrawShadow(targetHwnd)
     }
@@ -462,18 +508,39 @@ WatchPinnedWindows() {
     toRemove := []
     needRegionUpdate := fgChanged
     for targetHwnd, info in PinnedWindows {
-        ; drop windows that closed or are no longer topmost
-        if (!WinExist("ahk_id " targetHwnd) || !win_IsTopmost(targetHwnd)) {
+        ; Closed, or no longer topmost (un-pinned from outside): forget it.  The
+        ; window may also vanish between the two checks, which would throw - treat
+        ; that as gone as well.
+        try {
+            alive := DllCall("IsWindow", "Ptr", targetHwnd) && win_IsTopmost(targetHwnd)
+        } catch {
+            alive := false
+        }
+        if (!alive) {
             toRemove.Push(targetHwnd)
             continue
         }
         overlayHwnd := info.overlay
-        if (WinGetMinMax("ahk_id " targetHwnd) = -1) {  ; minimized -> hide overlay
-            DllCall("ShowWindow", "Ptr", overlayHwnd, "Int", 0)
+
+        ; Keep the pin in every state, but show no border while the window is not
+        ; normally on screen: minimized, maximized, hidden to the tray, cloaked,
+        ; off-screen, borderless fullscreen.  It is redrawn when it is back.
+        if (!ShouldShowBorder(targetHwnd)) {
+            if (info.shown) {
+                DllCall("ShowWindow", "Ptr", overlayHwnd, "Int", 0)  ; SW_HIDE
+                info.shown := false
+            }
             continue
         }
-        DllCall("ShowWindow", "Ptr", overlayHwnd, "Int", 8)  ; SW_SHOWNA
+
         win_GetVisibleRect(targetHwnd, &nx, &ny, &nw, &nh)
+        if (!info.shown) {                 ; back from an abnormal state: redraw
+            info.x := nx, info.y := ny, info.w := nw, info.h := nh
+            info.r := win_GetCornerRadius(targetHwnd)
+            DrawShadow(targetHwnd)         ; draws the pixels and shows the overlay
+            needRegionUpdate := true
+            continue
+        }
         moved := (nx != info.x || ny != info.y)
         resized := (nw != info.w || nh != info.h)
         if (moved || resized) {
@@ -550,6 +617,8 @@ UpdateOverlayRegions() {
     ; For each overlay, clip out areas covered by overlays that sit ABOVE it in
     ; z-order (independent of which window is active), plus any popup menu.
     for targetHwnd, info in PinnedWindows {
+        if (!info.shown)          ; overlay hidden: nothing to clip
+            continue
         overlayHwnd := info.overlay
         myZ := zorder.Has(targetHwnd) ? zorder[targetHwnd] : 0x7FFFFFFF
         OverlayRect(info, &ox, &oy, &ow, &oh)
@@ -561,7 +630,7 @@ UpdateOverlayRegions() {
             clipped := true
 
         for otherHwnd, otherInfo in PinnedWindows {
-            if (otherHwnd = targetHwnd)
+            if (otherHwnd = targetHwnd || !otherInfo.shown)
                 continue
             otherZ := zorder.Has(otherHwnd) ? zorder[otherHwnd] : 0x7FFFFFFF
             if (otherZ >= myZ) ; other is below me -> doesn't cover my border
@@ -579,6 +648,21 @@ UpdateOverlayRegions() {
             DllCall("DeleteObject", "Ptr", hRgn)
         }
     }
+}
+
+; ==========================================================================
+; Uncaught errors: log them instead of raising a modal dialog (see OnError at
+; startup).  The dialog would freeze every timer - and leave a stale border on
+; screen until it is dismissed.
+; ==========================================================================
+LogError(err, mode) {
+    text := FormatTime(, "yyyy-MM-dd HH:mm:ss") " WinAlwaysOnTop: " err.Message
+    if (err.HasProp("File") && err.File != "")
+        text .= " (" err.File ":" err.Line ")"
+    if (err.HasProp("Stack") && err.Stack != "")
+        text .= "`n" err.Stack
+    try FileAppend(text "`n", A_ScriptDir "\..\..\error.log")
+    return 1   ; do not show the dialog
 }
 
 ; ==========================================================================

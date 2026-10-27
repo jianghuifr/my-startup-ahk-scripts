@@ -1,8 +1,12 @@
 ; Window helpers (AutoHotkey v2)
 
-; True if the window has the WS_EX_TOPMOST style.
+; True if the window has the WS_EX_TOPMOST style.  Reads the style directly
+; instead of WinGetExStyle(), so it also works for a hidden (tray) window - the
+; AutoHotkey window functions skip hidden windows unless DetectHiddenWindows is
+; on, and a pinned window must stay tracked while it is hidden.
 win_IsTopmost(hwnd) {
-    return (WinGetExStyle("ahk_id " hwnd) & 0x8) ? true : false
+    static GWL_EXSTYLE := -20
+    return (DllCall("GetWindowLongPtrW", "Ptr", hwnd, "Int", GWL_EXSTYLE, "Ptr") & 0x8) ? true : false
 }
 
 ; ============================================================================
@@ -100,4 +104,55 @@ win_GetVisibleRect(hwnd, &x, &y, &w, &h) {
     } else {
         WinGetPos(&x, &y, &w, &h, "ahk_id " hwnd)
     }
+}
+
+; ============================================================================
+; Is the window really on screen in its normal state?
+; A pinned window that is minimized, maximized, hidden, on another virtual
+; desktop or otherwise not usable shows no border.
+; ============================================================================
+
+; True when DWM reports the window as cloaked - it lives on another virtual
+; desktop, is a suspended UWP app, and so on. Such a window exists, but none of
+; it is on screen.
+win_IsCloaked(hwnd) {
+    cloaked := Buffer(4, 0)
+    hr := DllCall("dwmapi\DwmGetWindowAttribute", "Ptr", hwnd, "UInt", 14
+                , "Ptr", cloaked, "UInt", 4)                       ; DWMWA_CLOAKED
+    return (hr = 0) ? (NumGet(cloaked, 0, "UInt") != 0) : false
+}
+
+; True when the rect covers its whole monitor: a borderless fullscreen window,
+; where a thin frame around the screen does not help.
+win_CoversWholeMonitor(x, y, w, h) {
+    mon := win_MonitorIndexAt(x + w // 2, y + h // 2)
+    if (!mon)
+        return false
+    MonitorGet(mon, &ml, &mt, &mr, &mb)
+    mw := mr - ml
+    mh := mb - mt
+    if (mw <= 0 || mh <= 0)
+        return false
+    return (x <= ml && y <= mt && x + w >= mr && y + h >= mb
+         && w >= mw * 0.98 && h >= mh * 0.98)
+}
+
+; True when the rect intersects at least one monitor.
+win_RectOnScreen(x, y, w, h) {
+    loop MonitorGetCount() {
+        MonitorGet(A_Index, &l, &t, &r, &b)
+        if (x < r && y < b && x + w > l && y + h > t)
+            return true
+    }
+    return false
+}
+
+; Index of the monitor containing the point, 0 when it is outside all of them.
+win_MonitorIndexAt(x, y) {
+    loop MonitorGetCount() {
+        MonitorGet(A_Index, &l, &t, &r, &b)
+        if (x >= l && x < r && y >= t && y < b)
+            return A_Index
+    }
+    return 0
 }
