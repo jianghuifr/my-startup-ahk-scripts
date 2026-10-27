@@ -42,7 +42,6 @@
 WP_Rules   := []
 WP_Opts    := 0
 WP_Windows := Map()   ; hwnd -> state
-WP_Ref     := 0       ; most recent foreground window no rule manages
 WP_Hook    := 0
 WP_Callback := 0      ; WinEventProc pointer, freed on exit
 WP_Warned  := false
@@ -58,7 +57,7 @@ WP_OWNER_PROP := "AHK_WinPlace_Owner"
 ; rule's classes is kept at the rect its target function returns.
 ; -----------------------------------------------------------------------------
 WinPlace_Start(rules, opts := 0) {
-    global WP_Rules, WP_Opts, WP_Windows, WP_Ref, WP_Warned, WP_Hook
+    global WP_Rules, WP_Opts, WP_Windows, WP_Warned, WP_Hook
 
     WP_Rules := rules
     WP_Opts := {pollMs: 120, tolerance: 2, settleCheckMs: 80, settleMs: 1500, logFile: ""}
@@ -69,7 +68,6 @@ WinPlace_Start(rules, opts := 0) {
             WP_Opts.%k% := v
     }
     WP_Windows := Map()
-    WP_Ref := 0
     WP_Warned := false
 
     DetectHiddenWindows(false)
@@ -134,13 +132,7 @@ WP_OnShowEvent(hook, event, hwnd, idObject, idChild, thread, time) {
 }
 
 WP_Tick() {
-    global WP_Rules, WP_Windows, WP_Ref, WP_OWNER_PROP
-
-    ; Remember the last foreground window that no rule manages: rules that
-    ; place a window relative to whatever the user was working in need it.
-    fg := DllCall("GetForegroundWindow", "Ptr")
-    if (fg && fg != WP_Ref && !WP_RuleForWindow(fg) && WinPlace_IsUsableRef(fg))
-        WP_Ref := fg
+    global WP_Rules, WP_Windows, WP_OWNER_PROP, WP_Opts
 
     seen := Map()
     for ruleId, rule in WP_Rules {
@@ -159,6 +151,16 @@ WP_Tick() {
             DllCall("RemovePropW", "Ptr", hwnd, "WStr", WP_OWNER_PROP)
             WP_Windows.Delete(hwnd)
         }
+
+    ; With no managed window there is nothing to enforce, and the show hook still
+    ; catches new windows at once; back the poll off instead of enumerating every
+    ; top-level window every 120 ms.
+    static interval := 0
+    wanted := (WP_Windows.Count = 0) ? Max(WP_Opts.pollMs * 5, 600) : WP_Opts.pollMs
+    if (wanted != interval) {
+        interval := wanted
+        SetTimer(WP_Tick, interval)
+    }
 }
 
 ; Visible and in the normal state: 0 = normal, 1 = maximized, -1 = minimized.
@@ -482,34 +484,6 @@ WinPlace_ClampToWorkArea(x, y, w, h, &cx, &cy, &cw, &ch) {
     ch := h
 }
 
-; The last foreground window that no rule manages - i.e. the window the user
-; was working in before one of the managed windows appeared.
-WinPlace_LastRef() {
-    global WP_Ref
-    return WP_Ref
-}
-
-; A window worth using as a reference: a visible, not minimized top-level
-; window with a caption and a title (skips the desktop, the taskbar, tool
-; windows, menus, ...).
-WinPlace_IsUsableRef(hwnd) {
-    if (!hwnd || !DllCall("IsWindow", "Ptr", hwnd))
-        return false
-    if (WP_RuleForWindow(hwnd) || !WP_IsTrackable(hwnd))
-        return false
-    if (DllCall("GetWindowTextLength", "Ptr", hwnd) = 0)
-        return false
-    try {
-        if (!(WinGetStyle("ahk_id " hwnd) & 0x00C00000))     ; WS_CAPTION
-            return false
-        if (WinGetExStyle("ahk_id " hwnd) & 0x00000080)      ; WS_EX_TOOLWINDOW
-            return false
-    } catch {
-        return false
-    }
-    return true
-}
-
 ; =============================================================================
 ; Misc
 ; =============================================================================
@@ -578,7 +552,9 @@ WP_IsProcessElevated(pid) {
     return elevated
 }
 
-; Repeated identical complaints (a window that keeps failing) are collapsed.
+; Repeated identical complaints (a window that keeps failing) are collapsed, and
+; the log is rotated here too: several scripts append to the same error.log and
+; only one of them runs the manager.
 WP_Log(text) {
     global WP_Opts
     static lastText := "", lastTick := 0
@@ -588,5 +564,13 @@ WP_Log(text) {
         return
     lastText := text
     lastTick := A_TickCount
-    try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") " winplace: " text "`n", WP_Opts.logFile)
+    try {
+        if (FileExist(WP_Opts.logFile) && FileGetSize(WP_Opts.logFile) > 256 * 1024) {
+            oldLog := (SubStr(WP_Opts.logFile, -4) = ".log")
+                ? SubStr(WP_Opts.logFile, 1, -4) ".old.log"
+                : WP_Opts.logFile ".old"
+            FileMove(WP_Opts.logFile, oldLog, 1)
+        }
+        FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") " winplace: " text "`n", WP_Opts.logFile)
+    }
 }

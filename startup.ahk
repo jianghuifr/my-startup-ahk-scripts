@@ -6,12 +6,10 @@ SetWorkingDir(A_ScriptDir)
 DetectHiddenWindows(true)
 SetTitleMatchMode(2)
 
-StateFile := A_ScriptDir "\state.ini"
-LogFile := A_ScriptDir "\error.log"
-StartupDir := A_ScriptDir "\startup"
+#Include %A_ScriptDir%\startup\lib\logging.ahk
 
-; Keep the log bounded: one rotation per start is enough.
-RotateLog()
+StateFile := A_ScriptDir "\state.ini"
+StartupDir := A_ScriptDir "\startup"
 
 Scripts := []          ; Array of {name, path, submenu, label, menu}
 SubMenus := Map()      ; submenu name => array of script indices
@@ -31,11 +29,6 @@ DiscoverScripts(StartupDir)
 RestoreState()
 BuildMenu()
 
-; The Win32 tray menu is only built when the icon is clicked, so without this
-; the checkmarks would go stale the moment a script starts or stops on its own
-; (crash, manual launch, another session). A slow poll is enough.
-SetTimer(RefreshChecks, 2000)
-
 for s in Scripts {
     if Enabled[s.path]
         LaunchScript(s)
@@ -45,7 +38,18 @@ for s in Scripts {
 ; the menu is correct immediately instead of waiting for the first timer tick.
 RefreshChecks()
 
+; The Win32 tray menu is only built when the icon is clicked, so without this
+; the checkmarks would go stale the moment a script starts or stops on its own
+; (crash, manual launch, another session). A slow poll is enough.  It is started
+; after the launch loop so no timer can fire before OnError is installed below.
+SetTimer(RefreshChecks, 2000)
+
 OnExit(ExitCleanup)
+
+; A timer or menu thread that throws would otherwise raise a modal dialog, which
+; freezes the tray until it is dismissed.  Log it and let the next tick retry.
+OnError(LogUncaught)
+
 Return
 
 ; ==============================================================================
@@ -182,10 +186,17 @@ RefreshChecks() {
     ; vX.Y.Z", however the script was started.
     runningPid := Map()
     for hwnd in WinGetList("ahk_class AutoHotkey") {
-        title := WinGetTitle("ahk_id " hwnd)
+        ; The window can be destroyed between the enumeration and these calls.
+        ; That race is expected, so it is handled quietly here.
+        try {
+            title := WinGetTitle("ahk_id " hwnd)
+            pid := WinGetPID("ahk_id " hwnd)
+        } catch {
+            continue
+        }
         for s in Scripts {
             if (!runningPid.Has(s.path) && InStr(title, s.path))
-                runningPid[s.path] := WinGetPID("ahk_id " hwnd)
+                runningPid[s.path] := pid
         }
     }
 
@@ -193,8 +204,9 @@ RefreshChecks() {
     ; ...) still runs, but is stuck; note the processes that show one.
     dialogPid := Map()
     for hwnd in WinGetList("ahk_class #32770") {
-        if (DllCall("IsWindowVisible", "Ptr", hwnd))
-            dialogPid[WinGetPID("ahk_id " hwnd)] := true
+        if (DllCall("IsWindowVisible", "Ptr", hwnd)) {
+            try dialogPid[WinGetPID("ahk_id " hwnd)] := true
+        }
     }
 
     running := 0
@@ -442,19 +454,21 @@ MenuExit(*) {
 ; ==============================================================================
 ExitCleanup(reason, code) {
     SaveState()
-    LogError("Exit reason: " reason " code: " code)
+    ; Clean exits (Close, menu Exit, reload, shutdown) are not worth a log line.
+    if (reason = "Error" || reason = "Critical")
+        LogError("Exit reason: " reason " code: " code)
 }
 
 LogError(message) {
-    global LogFile
-    try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") " " message "`n", LogFile)
+    LogWrite("Manager", message)
 }
 
-; error.log is append-only; keep one old file instead of letting it grow forever.
-RotateLog() {
-    global LogFile
-    try {
-        if (FileExist(LogFile) && FileGetSize(LogFile) > 256 * 1024)
-            FileMove(LogFile, A_ScriptDir "\error.old.log", 1)
-    }
+; OnError handler: log the uncaught error instead of raising the modal dialog.
+; Returning 1 suppresses the default error dialog.
+LogUncaught(err, mode) {
+    text := err.Message
+    if (err.HasProp("File") && err.File != "")
+        text .= " (" err.File ":" err.Line ")"
+    LogError("Uncaught error: " text)
+    return 1
 }

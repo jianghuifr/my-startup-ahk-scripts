@@ -37,6 +37,7 @@ Persistent
 ; =============================================================================
 
 #Include ..\lib\dshwin.ahk
+#Include ..\lib\logging.ahk
 
 ; -----------------------------------------------------------------------------
 ; Settings
@@ -44,7 +45,6 @@ Persistent
 SIGNAL_FILE     := EnvGet("USERPROFILE") "\.dsh\attention-signal.json"   ; written by the plugin
 POLL_MS         := 250        ; how often to look at the signal file
 DEDUPE_MS       := 1500       ; ignore a repeat of the same kind within this window
-LOG_FILE        := A_ScriptDir "\..\..\error.log"
 TOAST_SCRIPT    := A_ScriptDir "\..\..\tools\DSHToast.ps1"
 ACTIVATE_SCRIPT := A_ScriptDir "\..\..\tools\DSHActivate.ahk"
 PROTOCOL        := "dsh-attention"
@@ -172,6 +172,5 @@ RegisterProtocol() {
 ; Failures (the toast helper missing, PowerShell refusing, ...) are rare but
 ; silent otherwise; keep them next to the other scripts' errors.
 LogLine(text) {
-    global LOG_FILE
-    try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") " attention: " text "`n", LOG_FILE)
+    LogWrite("attention", text)
 }

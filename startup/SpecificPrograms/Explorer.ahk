@@ -145,15 +145,30 @@ CurrentWindowNewFile() {
         return
     }
     explorerWin.Refresh()
-    try
-        sfv.SelectItem(items.Item(newFileName), 1)   ; may lag behind the refresh
-    Loop 5 { ; Loop usually isn't necessary, but adds a bit of reliability.
-        Sleep(50)
+    ; Select the new item through the folder: the collection captured before the
+    ; file existed does not contain it, and selecting from that snapshot failed
+    ; silently - leaving "New File" where F2 then had nothing to rename.
+    newItem := 0
+    try newItem := sfv.Folder.ParseName(newFileName)
+    if (!newItem) {
+        ToolTip("Could not select the new file")
+        SetTimer(() => ToolTip(), -3000)
+        return
+    }
+    try sfv.SelectItem(newItem, 1)
+    ; F2 starts the in-place rename asynchronously, so poll for the edit control
+    ; instead of pressing it again at once - a second F2 commits the edit again
+    ; and leaves the file with its default name.
+    Loop 4 {
         Send("{F2}")
-        ; Verify we're now in rename mode.
-        focusHwnd := ControlGetFocus("A")
-        focus := focusHwnd ? ControlGetClassNN(focusHwnd) : ""
-    } until (focus = "Edit1")
+        Loop 10 {
+            Sleep(40)
+            focusHwnd := ControlGetFocus("A")
+            focus := focusHwnd ? ControlGetClassNN(focusHwnd) : ""
+            if (focus = "Edit1")
+                return
+        }
+    }
 }
 
 MouseIsOver(class, control := "") {

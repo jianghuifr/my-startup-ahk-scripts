@@ -5,6 +5,7 @@ Persistent
 
 #Include gdip.ahk
 #Include win.ahk
+#Include %A_ScriptDir%\..\lib\logging.ahk
 
 ; ==============================================================================
 ; State
@@ -26,7 +27,9 @@ global SHADOW_ALPHA := 255       ; max alpha at inner edge
 global RAINBOW := true       ; true -> animated rainbow border, false -> solid SHADOW_COLOR
 global HUE_OFFSET := 0        ; current hue scroll offset (degrees), advanced by the timer
 global RAINBOW_SPAN := 360    ; total hue degrees spread around the whole border
-global RAINBOW_SPEED := 3     ; degrees of hue scroll per animation tick
+global RAINBOW_SPEED := 4     ; degrees of hue scroll per animation tick (60 ms)
+global HuePens := Map()       ; GDI+ pens, cached per hue bucket
+global HUE_PEN_STEP := 2      ; hue degrees per cached pen
 
 global MATH_PI := 3.141592653589793  ; AHK v2 has no PI builtin
 
@@ -78,7 +81,7 @@ InitExistingWindows()
 SetTimer(WatchPinnedWindows, 30)
 SetTimer(InjectMenuOnForeground, 200)
 if (RAINBOW)
-    SetTimer(AnimateRainbow, 50)
+    SetTimer(AnimateRainbow, 60)
 
 ; From here on the script lives in timer/message threads: an uncaught error in
 ; one of them would raise a dialog, which freezes every timer and leaves a stale
@@ -264,7 +267,7 @@ CreateOverlay(targetHwnd) {
     g.Show("NA Hide")
     win_GetVisibleRect(targetHwnd, &wx, &wy, &ww, &wh)
     PinnedWindows[targetHwnd] := {gui: g, overlay: g.Hwnd, x: wx, y: wy, w: ww, h: wh
-        , r: win_GetCornerRadius(targetHwnd), shown: false}
+        , r: win_GetCornerRadius(targetHwnd), shown: false, placed: false, raisedAt: 0}
     ; Pinning a window that is not in its normal state right now (maximized,
     ; hidden, minimized, ...) keeps the pin but shows no border; WatchPinnedWindows
     ; draws it when the window is normal again.
@@ -275,7 +278,9 @@ CreateOverlay(targetHwnd) {
 RemoveOverlay(targetHwnd) {
     if (!PinnedWindows.Has(targetHwnd))
         return
-    PinnedWindows[targetHwnd].gui.Destroy()
+    info := PinnedWindows[targetHwnd]
+    FreeSurface(info)
+    info.gui.Destroy()
     PinnedWindows.Delete(targetHwnd)
 }
 
@@ -290,10 +295,11 @@ DrawShadow(targetHwnd) {
         return
 
     OverlayRect(info, &ox, &oy, &ow, &oh)
-
-    DllCall("gdiplus\GdipCreateBitmapFromScan0", "Int", ow, "Int", oh, "Int", 0, "Int", 0x26200A, "Ptr", 0, "Ptr*", &pBitmap := 0)
-    DllCall("gdiplus\GdipGetImageGraphicsContext", "Ptr", pBitmap, "Ptr*", &pGraphics := 0)
-    DllCall("gdiplus\GdipSetSmoothingMode", "Ptr", pGraphics, "Int", 4)
+    if (ow < 1 || oh < 1)
+        return
+    if (!EnsureSurface(info, ow, oh))   ; cached bitmap + Graphics, reused per size
+        return
+    DllCall("gdiplus\GdipGraphicsClear", "Ptr", info.pGraphics, "UInt", 0)
 
     ; Border path geometry: the overlay rectangle inset by half the border width,
     ; with the target window's corner radius (0 = square corners). Named `rad`
@@ -303,44 +309,12 @@ DrawShadow(targetHwnd) {
     H := oh - SHADOW
     rad := Min(info.r / WIN_COORD_SCALE, W / 2, H / 2)
 
-    if (RAINBOW) {
-        ; Draw the border as colored segments along the perimeter, hue mapped to
-        ; position so it forms a continuous rainbow; HUE_OFFSET scrolls it. The
-        ; path follows the window's rounded corners (Win11) when it has any.
-        straightW := W - 2 * rad
-        straightH := H - 2 * rad
-        perim := 2 * (straightW + straightH) + 2 * MATH_PI * rad
-        if (perim >= 1) {
-            segLen := 4.0  ; ~4px keeps it smooth without too many draw calls
-            segCount := Ceil(perim / segLen)
-            half := SHADOW / 2.0
-            Loop segCount {
-                d := (A_Index - 1) * segLen          ; distance along perimeter
-                BorderPathPoint(d, ow, oh, rad, half, &x1, &y1)
-                BorderPathPoint(d + segLen, ow, oh, rad, half, &x2, &y2)
-                hue := Mod((d / perim) * RAINBOW_SPAN + HUE_OFFSET, 360)
-                col := gdip_HsvToColor(hue, 1.0, 1.0, SHADOW_ALPHA)
-                DllCall("gdiplus\GdipCreatePen1", "UInt", col, "Float", SHADOW * 1.0, "Int", 2, "Ptr*", &pPen := 0)
-                DllCall("gdiplus\GdipDrawLine", "Ptr", pGraphics, "Ptr", pPen, "Float", x1, "Float", y1, "Float", x2, "Float", y2)
-                DllCall("gdiplus\GdipDeletePen", "Ptr", pPen)
-            }
-        }
-    } else {
-        ; Solid border: concentric rounded outlines fading towards the window.
-        R := (SHADOW_COLOR >> 16) & 0xFF
-        G := (SHADOW_COLOR >> 8) & 0xFF
-        B := SHADOW_COLOR & 0xFF
-        Loop SHADOW {
-            i := A_Index - 1
-            frac := (SHADOW - i) / SHADOW
-            alpha := Floor(SHADOW_ALPHA * frac * frac)
-            DllCall("gdiplus\GdipCreatePen1", "UInt", (alpha << 24) | (R << 16) | (G << 8) | B, "Float", 1.0, "Int", 2, "Ptr*", &pPen := 0)
-            StrokeOutline(pGraphics, pPen, ow, oh, Max(0, rad - i), i + 0.5)
-            DllCall("gdiplus\GdipDeletePen", "Ptr", pPen)
-        }
-    }
+    if (RAINBOW)
+        DrawRainbow(info, ow, oh, rad)
+    else
+        DrawSolid(info, ow, oh, rad)
 
-    DllCall("gdiplus\GdipCreateHBITMAPFromBitmap", "Ptr", pBitmap, "Ptr*", &hBitmap := 0, "UInt", 0)
+    DllCall("gdiplus\GdipCreateHBITMAPFromBitmap", "Ptr", info.pBitmap, "Ptr*", &hBitmap := 0, "UInt", 0)
 
     hDC_screen := DllCall("GetDC", "Ptr", 0, "Ptr")
     hDC_mem := DllCall("CreateCompatibleDC", "Ptr", hDC_screen, "Ptr")
@@ -373,17 +347,139 @@ DrawShadow(targetHwnd) {
         , "Ptr", blend
         , "UInt", 2)
 
-    info.gui.Show("NA")
+    if (!info.shown)
+        info.gui.Show("NA")
     info.shown := true
-    ; Place overlay at the very top - z-order handled via region clipping
-    DllCall("SetWindowPos", "Ptr", overlayHwnd, "Ptr", -1, "Int", 0, "Int", 0, "Int", 0, "Int", 0, "UInt", 0x13) ; HWND_TOPMOST
+    ; Keep the overlay above other topmost windows, but not on every animation
+    ; frame - raising a window 20 times a second is wasted work.
+    if (!info.placed || A_TickCount - info.raisedAt > 400) {
+        DllCall("SetWindowPos", "Ptr", overlayHwnd, "Ptr", -1, "Int", 0, "Int", 0, "Int", 0, "Int", 0, "UInt", 0x13) ; HWND_TOPMOST
+        info.placed := true
+        info.raisedAt := A_TickCount
+    }
 
     DllCall("SelectObject", "Ptr", hDC_mem, "Ptr", hOld)
     DllCall("DeleteDC", "Ptr", hDC_mem)
     DllCall("ReleaseDC", "Ptr", 0, "Ptr", hDC_screen)
     DllCall("DeleteObject", "Ptr", hBitmap)
-    DllCall("gdiplus\GdipDeleteGraphics", "Ptr", pGraphics)
-    DllCall("gdiplus\GdipDisposeImage", "Ptr", pBitmap)
+}
+
+; ----------------------------------------------------------------------------
+; Cached GDI+ surface per overlay: one bitmap + Graphics for the current size.
+; Recreating a full ARGB bitmap and its Graphics on every frame was the bulk of
+; the border's cost; now only the pixels change.
+; ----------------------------------------------------------------------------
+EnsureSurface(info, ow, oh) {
+    if (info.HasProp("pBitmap") && info.pBitmap && info.bw = ow && info.bh = oh)
+        return true
+    FreeSurface(info)
+    DllCall("gdiplus\GdipCreateBitmapFromScan0", "Int", ow, "Int", oh, "Int", 0
+          , "Int", 0x26200A, "Ptr", 0, "Ptr*", &bm := 0)
+    if (!bm)
+        return false
+    DllCall("gdiplus\GdipGetImageGraphicsContext", "Ptr", bm, "Ptr*", &g := 0)
+    if (!g) {
+        DllCall("gdiplus\GdipDisposeImage", "Ptr", bm)
+        return false
+    }
+    DllCall("gdiplus\GdipSetSmoothingMode", "Ptr", g, "Int", 4)
+    info.pBitmap := bm
+    info.pGraphics := g
+    info.bw := ow
+    info.bh := oh
+    return true
+}
+
+FreeSurface(info) {
+    if (info.HasProp("pGraphics") && info.pGraphics)
+        DllCall("gdiplus\GdipDeleteGraphics", "Ptr", info.pGraphics)
+    if (info.HasProp("pBitmap") && info.pBitmap)
+        DllCall("gdiplus\GdipDisposeImage", "Ptr", info.pBitmap)
+    info.pGraphics := 0
+    info.pBitmap := 0
+    info.bw := 0
+    info.bh := 0
+}
+
+; ----------------------------------------------------------------------------
+; Rainbow border: colored segments along the perimeter, hue mapped to position
+; so it forms a continuous rainbow; HUE_OFFSET scrolls it.  Segment geometry is
+; cached per size/radius and pens come from a small per-hue cache, so a frame no
+; longer allocates ~1500 pens or recomputes the path.
+; ----------------------------------------------------------------------------
+DrawRainbow(info, ow, oh, rad) {
+    global HUE_OFFSET, RAINBOW_SPAN
+    EnsureSegs(info, ow, oh, rad)
+    g := info.pGraphics
+    for seg in info.segs {
+        hue := Mod(seg.frac * RAINBOW_SPAN + HUE_OFFSET, 360)
+        DllCall("gdiplus\GdipDrawLine", "Ptr", g, "Ptr", GetHuePen(hue)
+              , "Float", seg.x1, "Float", seg.y1, "Float", seg.x2, "Float", seg.y2)
+    }
+}
+
+EnsureSegs(info, ow, oh, rad) {
+    global SHADOW, MATH_PI
+    if (info.HasProp("segs") && info.segs && info.segOw = ow && info.segOh = oh && info.segRad = rad)
+        return
+    segs := []
+    W := ow - SHADOW
+    H := oh - SHADOW
+    straightW := W - 2 * rad
+    straightH := H - 2 * rad
+    perim := 2 * (straightW + straightH) + 2 * MATH_PI * rad
+    if (perim >= 1) {
+        segLen := 4.0  ; ~4px keeps it smooth without too many draw calls
+        half := SHADOW / 2.0
+        Loop Ceil(perim / segLen) {
+            d := (A_Index - 1) * segLen          ; distance along perimeter
+            BorderPathPoint(d, ow, oh, rad, half, &x1, &y1)
+            BorderPathPoint(d + segLen, ow, oh, rad, half, &x2, &y2)
+            segs.Push({x1: x1, y1: y1, x2: x2, y2: y2, frac: d / perim})
+        }
+    }
+    info.segs := segs
+    info.segOw := ow
+    info.segOh := oh
+    info.segRad := rad
+}
+
+; Solid border: concentric rounded outlines fading towards the window.
+DrawSolid(info, ow, oh, rad) {
+    global SHADOW, SHADOW_COLOR, SHADOW_ALPHA
+    R := (SHADOW_COLOR >> 16) & 0xFF
+    G := (SHADOW_COLOR >> 8) & 0xFF
+    B := SHADOW_COLOR & 0xFF
+    g := info.pGraphics
+    Loop SHADOW {
+        i := A_Index - 1
+        frac := (SHADOW - i) / SHADOW
+        alpha := Floor(SHADOW_ALPHA * frac * frac)
+        DllCall("gdiplus\GdipCreatePen1", "UInt", (alpha << 24) | (R << 16) | (G << 8) | B, "Float", 1.0, "Int", 2, "Ptr*", &pen := 0)
+        StrokeOutline(g, pen, ow, oh, Max(0, rad - i), i + 0.5)
+        DllCall("gdiplus\GdipDeletePen", "Ptr", pen)
+    }
+}
+
+; Pens for the rainbow are cached per hue bucket: 180 pens at a 2-degree step
+; look continuous and are created once instead of ~1500 per frame.
+GetHuePen(hue) {
+    global HuePens, HUE_PEN_STEP, SHADOW, SHADOW_ALPHA
+    idx := Mod(Round(hue / HUE_PEN_STEP), Round(360 / HUE_PEN_STEP))
+    if (HuePens.Has(idx))
+        return HuePens[idx]
+    col := gdip_HsvToColor(idx * HUE_PEN_STEP, 1.0, 1.0, SHADOW_ALPHA)
+    DllCall("gdiplus\GdipCreatePen1", "UInt", col, "Float", SHADOW * 1.0, "Int", 2, "Ptr*", &pen := 0)
+    HuePens[idx] := pen
+    return pen
+}
+
+DeleteHuePens() {
+    global HuePens
+    for _, pen in HuePens
+        if (pen)
+            DllCall("gdiplus\GdipDeletePen", "Ptr", pen)
+    HuePens := Map()
 }
 
 ; ----------------------------------------------------------------------------
@@ -491,7 +587,14 @@ AnimateRainbow() {
             continue
         DrawShadow(targetHwnd)
     }
-    UpdateOverlayRegions()
+    ; Clipping regions only change when the z-order does; five times a second is
+    ; plenty (WatchPinnedWindows already refreshes them when the foreground
+    ; changes), and enumerating every top-level window 20x/s was wasteful.
+    static lastRegionTick := 0
+    if (A_TickCount - lastRegionTick >= 200) {
+        lastRegionTick := A_TickCount
+        UpdateOverlayRegions()
+    }
     Critical("Off")
 }
 
@@ -653,15 +756,13 @@ UpdateOverlayRegions() {
 ; ==========================================================================
 ; Uncaught errors: log them instead of raising a modal dialog (see OnError at
 ; startup).  The dialog would freeze every timer - and leave a stale border on
-; screen until it is dismissed.
+; screen until it is dismissed.  LogWrite deduplicates/rotates the shared log.
 ; ==========================================================================
 LogError(err, mode) {
-    text := FormatTime(, "yyyy-MM-dd HH:mm:ss") " WinAlwaysOnTop: " err.Message
+    text := err.Message
     if (err.HasProp("File") && err.File != "")
         text .= " (" err.File ":" err.Line ")"
-    if (err.HasProp("Stack") && err.Stack != "")
-        text .= "`n" err.Stack
-    try FileAppend(text "`n", A_ScriptDir "\..\..\error.log")
+    LogWrite("WinAlwaysOnTop", text)
     return 1   ; do not show the dialog
 }
 
@@ -675,9 +776,11 @@ OnExitHandler(reason, code) {
     for targetHwnd, info in PinnedWindows {
         try WinSetAlwaysOnTop(0, "ahk_id " targetHwnd)
         DllCall("RemovePropW", "Ptr", targetHwnd, "WStr", PIN_PROP)
+        FreeSurface(info)
         info.gui.Destroy()
     }
     PinnedWindows := Map()
+    DeleteHuePens()
     ; Remove injected menu items from all windows
     for hwnd, _ in InjectedMenus {
         hMenu := DllCall("GetSystemMenu", "Ptr", hwnd, "Int", 0, "Ptr")
