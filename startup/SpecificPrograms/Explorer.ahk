@@ -43,6 +43,7 @@ Persistent
 ; =============================================================================
 
 #Include ..\lib\winplace.ahk
+#Include ..\lib\shell.ahk
 
 ; -----------------------------------------------------------------------------
 ; Settings
@@ -93,31 +94,14 @@ MButton::!Up
 ; the desktop) and put it straight into rename mode.
 ; -----------------------------------------------------------------------------
 CurrentWindowNewFile() {
-    shellWindows := ComObject("Shell.Application").Windows
     explorerWin := 0
     if (WinActive("ahk_class Progman") || WinActive("ahk_class WorkerW")) {
         _hwnd := Buffer(4, 0)
-        explorerWin := shellWindows.FindWindowSW(0, "", 8, ComValue(0x4003, _hwnd.Ptr), 1)
+        try explorerWin := ComObject("Shell.Application").Windows.FindWindowSW(0, "", 8, ComValue(0x4003, _hwnd.Ptr), 1)
     } else {
-        hwnd := WinExist("A")
-        title := WinGetTitle("ahk_id " hwnd)
-        hwndOnly := 0
-        for w in shellWindows {
-            if (hwnd != w.Hwnd)
-                continue
-            ; Several tabs share one HWND: prefer the tab whose folder matches
-            ; the window title and keep the first HWND match as a fallback.
-            if (!hwndOnly)
-                hwndOnly := w
-            try {
-                if (w.Document.Folder.Self.Path = title) {
-                    explorerWin := w
-                    break
-                }
-            }
-        }
-        if (!explorerWin)
-            explorerWin := hwndOnly
+        ; Same tab-preference logic as HotKeys.ahk (lib\shell.ahk): several tabs
+        ; can share one HWND.
+        explorerWin := Shell_WindowForHwnd(WinExist("A"))
     }
     if (!explorerWin) {
         ToolTip("No Explorer window found")

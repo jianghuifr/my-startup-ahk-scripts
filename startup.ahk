@@ -11,7 +11,8 @@ SetTitleMatchMode(2)
 StateFile := A_ScriptDir "\state.ini"
 StartupDir := A_ScriptDir "\startup"
 
-Scripts := []          ; Array of {name, path, submenu, label, menu}
+Scripts := []          ; Array of {name, path, submenu, label, menu} +
+                       ; runtime state {running, stuck, launchTick}
 SubMenus := Map()      ; submenu name => array of script indices
 Enabled := Map()       ; script path => true/false: what the USER wants running
                        ; (persisted; deliberately not derived from the live state)
@@ -289,6 +290,7 @@ DiscoverScripts(dir) {
         sameNameScript := subdir "\" dirName ".ahk"
         if FileExist(sameNameScript) {
             AddScript(sameNameScript, "")
+            WarnIgnoredScripts(subdir, dirName, sameNameScript)
             continue
         }
         files := []
@@ -305,6 +307,35 @@ DiscoverScripts(dir) {
     SortStrings(files)
     for file in files
         AddScript(file, "")
+}
+
+; A folder that names one script is launched with only that script.  Other .ahk
+; files there are usually #Include'd supporting code (win.ahk, gdip.ahk next to
+; WinAlwaysOnTop.ahk); anything neither included nor launched is likely a
+; mistake and would otherwise just be silently missing from the tray menu.
+WarnIgnoredScripts(dir, dirName, mainScript) {
+    try source := FileRead(mainScript)
+    catch
+        return
+    ignored := []
+    loop files dir "\*.ahk", "F" {
+        name := A_LoopFileName
+        if (name = dirName ".ahk")
+            continue
+        if (InStr(source, name))        ; used as an include by the folder's script
+            continue
+        ignored.Push(name)
+    }
+    if (ignored.Length)
+        LogError("Discovery: not launching " JoinStrings(ignored, ", ")
+               . " in " dirName "\ (only " dirName ".ahk is used there)")
+}
+
+JoinStrings(arr, sep) {
+    s := ""
+    for v in arr
+        s .= (s = "" ? "" : sep) v
+    return s
 }
 
 ; Case-insensitive insertion sort; an AHK v2 Array has no Sort method.
@@ -358,21 +389,51 @@ LaunchScript(s) {
     }
 }
 
-; Close a script and wait for it to leave, so the state saved right afterwards
+; Close a script without waiting; StopAll() closes the whole batch and waits once.
+CloseScript(s) {
+    hwnd := WinExist(s.path " ahk_class AutoHotkey")
+    if (hwnd)
+        WinClose("ahk_id " hwnd)
+}
+
+; Close one script and wait for it to leave, so the state saved right afterwards
 ; does not say "off" while the process is still alive.  The wait is normally a
 ; few dozen milliseconds; one second is the point where something is wrong.
 KillScript(s) {
-    hwnd := WinExist(s.path " ahk_class AutoHotkey")
-    if (!hwnd)
+    if (!WinExist(s.path " ahk_class AutoHotkey"))
         return true
-    WinClose("ahk_id " hwnd)
-    Loop 20 {
-        Sleep(50)
+    CloseScript(s)
+    Loop 40 {          ; up to 1 s, polling every 25 ms
+        Sleep(25)
         if (!WinExist(s.path " ahk_class AutoHotkey"))
             return true
     }
     LogError("Script did not close within 1 s: " s.path)
     return false
+}
+
+; Wait until no script is running any more, up to timeoutMs; returns the paths
+; that are still alive.  One shared deadline instead of one wait per script.
+WaitScriptsClosed(timeoutMs) {
+    global Scripts
+    deadline := A_TickCount + timeoutMs
+    while (A_TickCount < deadline) {
+        any := false
+        for s in Scripts {
+            if (WinExist(s.path " ahk_class AutoHotkey")) {
+                any := true
+                break
+            }
+        }
+        if (!any)
+            return []
+        Sleep(25)
+    }
+    still := []
+    for s in Scripts
+        if (WinExist(s.path " ahk_class AutoHotkey"))
+            still.Push(s.path)
+    return still
 }
 
 ; ==============================================================================
@@ -407,8 +468,12 @@ StopAll(*) {
     global Scripts, Enabled
     for s in Scripts
         Enabled[s.path] := false
+    ; Close every script first, then wait for the batch with one deadline: a
+    ; wedged script costs one second in total instead of one second each.
     for s in Scripts
-        KillScript(s)
+        CloseScript(s)
+    for path in WaitScriptsClosed(1200)
+        LogError("Script did not close within 1.2 s: " path)
     SaveState()
     RefreshSoon()
 }
@@ -423,25 +488,10 @@ RefreshSoonRun() {
     RefreshChecks()
 }
 
-; Restart every script: stop all, wait for their windows to close, then start.
-; Handy after editing scripts, since #SingleInstance Force means a fresh launch
-; replaces the old instance.
+; Stop everything, wait for the batch, then start it again; handy after editing
+; scripts, since #SingleInstance Force means a fresh launch replaces the old one.
 RestartAll(*) {
-    global Scripts
-    StopAll()
-    ; wait until running scripts have actually exited (up to ~2s)
-    Loop 20 {
-        anyRunning := false
-        for s in Scripts {
-            if IsScriptRunning(s.path) {
-                anyRunning := true
-                break
-            }
-        }
-        if (!anyRunning)
-            break
-        Sleep(100)
-    }
+    StopAll()   ; closes everything and waits once for the whole batch
     StartAll()
 }
 

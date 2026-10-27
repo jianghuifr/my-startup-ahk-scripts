@@ -14,7 +14,7 @@ DRAG_Y := SysGet(69) ; SM_CYDRAG
     global DRAG_X, DRAG_Y
     if WinActive("ahk_exe mstsc.exe") ; except mstsc.exe
         return
-    if WinActive("ahk_class WorkerW") ; except desktop
+    if WinActive("ahk_class WorkerW") || WinActive("ahk_class Progman") ; except desktop
         return
     if WinActive("ahk_class Windows.UI.Core.CoreWindow") ; except start menu
         return

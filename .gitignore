@@ -6,3 +6,9 @@
 !startup/**
 !tools/
 !tools/**
+
+# runtime files, per machine - never commit
+state.ini
+state.ini.tmp
+error.log
+error.old.log

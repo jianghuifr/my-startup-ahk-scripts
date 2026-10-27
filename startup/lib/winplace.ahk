@@ -1,8 +1,8 @@
 ; =============================================================================
 ; winplace.ahk -- engine that keeps matched windows at a computed geometry
 ; -----------------------------------------------------------------------------
-; Shared by the per-class scripts in SpecificPrograms\, which include it and
-; then call WinPlace_Start:
+; Shared by the window-placement scripts (Explorer.ahk, EverythingCenter.ahk),
+; which include it and then call WinPlace_Start:
 ;
 ;   #Include ..\lib\winplace.ahk
 ;   WinPlace_Start([{classes: ["EVERYTHING"], target: MyTarget}], {pollMs: 120})

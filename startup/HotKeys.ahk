@@ -4,6 +4,7 @@
 
 #Include lib\system.ahk
 #Include lib\everything.ahk
+#Include lib\shell.ahk
 
 ; Everything's install path differs between machines, so it is resolved once
 ; here at startup (the Everything service knows it) instead of being hard-coded;
@@ -13,7 +14,7 @@ EVERYTHING_EXE := EverythingFindExecutable()
 SetCapsLockState("AlwaysOff")
 CapsLock:: {
     ToolTip(GetKeyState("CapsLock", "T") ? "CapsLock On" : "CapsLock Off", 0, 0)
-    SetTimer(RemoveToolTip, 3000)
+    SetTimer(RemoveToolTip, -3000)   ; one-shot: do not clear other tooltips forever
 }
 +CapsLock::SetCapsLockState(!GetKeyState("CapsLock", "T") ? "On" : "Off")
 
@@ -61,13 +62,9 @@ CurrentFolder(hWnd := 0) {
             hWnd := WinExist("ahk_class CabinetWClass") || WinExist("ahk_class ExploreWClass")
     }
     if (hWnd) {
-        try {
-            shell := ComObject("Shell.Application")
-            for win in shell.Windows {
-                if (win.hWnd = hWnd)
-                    return win.Document.Folder.Self.Path
-            }
-        }
+        path := Shell_FolderPath(hWnd)
+        if (path != "")
+            return path
     }
     return EnvGet("USERPROFILE")
 }
